@@ -1,54 +1,87 @@
 # DOCKER-VERSION 1.0
-FROM dit4c/dit4c-container-ipython
+FROM dansand/underworld2-dev
+FROM dit4c/dit4c-container-base:withroot-gotty
 MAINTAINER t.dettrick@uq.edu.au
 
-ENV PETSC_VERSION 3.5.3
+# Install
+# - build dependencies for Python PIP
+# - ccache to make building faster
+# - virtualenv to setup python environment
+# - matplotlib dependencies
+# - scipy dependencies
+# - pytables dependencies
+# - netcdf4 dependencies
+# - nltk dependencies
+# - Xvfb for Python modules requiring X11
+# - GhostScript & ImageMagick for image manipulation
+RUN rpm --rebuilddb && yum install -y \
+  gcc gcc-c++ python34-devel \
+  ccache \
+  blas-devel lapack-devel \
+  libpng-devel freetype-devel \
+  hdf5-devel \
+  netcdf-devel \
+  libyaml-devel tkinter \
+  xorg-x11-server-Xvfb \
+  ghostscript ImageMagick
 
-RUN fsudo yum install -y \
-  libxml2-devel libpng-devel \
-  openmpi-devel hdf5-openmpi-static \
-  hostname time \
-  gdal-devel geos-devel proj-devel libxml2-devel libxslt-devel \
-  mesa-libOSMesa-devel mesa-libGLU-devel libX11-devel \
-  swig
+RUN  mkdir /opt/ipython && mkdir /opt/python && \
+    chown researcher:researcher /opt/ipython && \
+    chown researcher:researcher /opt/python
 
+USER root
+USER researcher
 
-# Install PETSc
-RUN cd /tmp && \
-    wget -nv "http://ftp.mcs.anl.gov/pub/petsc/release-snapshots/petsc-lite-$PETSC_VERSION.tar.gz" && \
-    tar xzf petsc-lite-$PETSC_VERSION.tar.gz && \
-    cd petsc-$PETSC_VERSION && \
-    export LD_LIBRARY_PATH=/usr/lib64/openmpi/lib:$LD_LIBRARY_PATH && \
-    ./configure --prefix=/usr/local/petsc --download-fblaslapack --with-mpi-dir=/usr/lib64/openmpi --with-pic=1 && \
-    make all test && \
-    make install && \
-    cd /tmp && \
-    rm -r petsc-$PETSC_VERSION
+# Install system-indepedent python environment
+RUN pyvenv-3.4 --without-pip /opt/python && \
+  cd /tmp && \
+  curl -L -s https://bootstrap.pypa.io/get-pip.py | /opt/python/bin/python
 
-RUN git clone https://github.com/underworldcode/underworld2.git /opt/underworld
+# Install from PIP, using ccache to speed build
+# - Updates for setuptools, pip & wheels
+# - Notebook dependencies
+# - IPython (with notebook)
+# - Readline for usability
+# - Missing IPython dependencies
+# - Useful IPython libraries
+# - SciPy & netCDF4 (which expect numpy to be installed first)
+RUN source /opt/python/bin/activate && \
+  PATH=/usr/lib64/ccache:$PATH && \
+  pip install --upgrade pip wheel && \
+  pip install \
+    tornado pyzmq jinja2 \
+    ipython jupyter \
+    jsonschema \
+    ipythonblocks numpy pandas matplotlib gitpython && \
+  pip install scipy netCDF4 && \
+  pip install numexpr cython && \
+  pip install git+git://github.com/pytables/pytables@develop && \
+  ccache --show-stats && \
+  ccache --clear && \
+  rm -rf /home/researcher/.cache
 
+# Install NLTK, textblob & pyStatParser
+RUN /opt/python/bin/pip install nltk textblob pyyaml && \
+  /opt/python/bin/pip install git+https://github.com/emilmont/pyStatParser.git@master#egg=pyStatParser && \
+  rm -rf /home/researcher/.cache
 
+# Create IPython profile, then
+# install MathJAX locally because CDN is HTTP-only
+RUN IPYTHONDIR=/opt/ipython /opt/python/bin/ipython profile create default && \
+  /opt/python/bin/python -c "from IPython.external.mathjax import install_mathjax; install_mathjax()" && \
+  rm -rf /home/researcher/.ipython
 
-## Disabled until a more modern version of ffmpeg is supported by Underworld
-#RUN rpm --import /etc/RPM-GPG-KEY.atrpms && \
-#    rpm -Uvh http://dl.atrpms.net/all/atrpms-repo-7-7.el7.x86_64.rpm && \
-#    fsudo yum install -y ffmpeg-devel
+USER root
 
-# Compile Underworld & gLucifer
-# Note: CFLAGS isn't required - it just squelches the enormous number of compile
-# warnings which would otherwise clutter the build log.
-RUN cd /opt/underworld/libUnderworld && \
-    ./configure.py --help && \
-    export PATH=$PATH:/usr/lib64/openmpi/bin && \
-    export PETSC_ARCH=linux-gnu && \
-    export PETSC_DIR=/usr/local/petsc && \
-    export LD_LIBRARY_PATH=/usr/lib64/openmpi/lib:$LD_LIBRARY_PATH && \
-    source /opt/python/bin/activate && \
-    ./configure.py --cxx=/usr/lib64/openmpi/bin/mpicxx --cc=/usr/lib64/openmpi/bin/mpicc --mpi-lib-dir=/usr/lib64/openmpi/lib --mpi-inc-dir=/usr/include/openmpi-x86_64 && \
-    ./scons.py && \
-    cd libUnderworldPy ; ./swigall.py ; cd ../ && \
-    ./scons.py && \
-    (rm /opt/underworld/libUnderworld/build/bin/LavaVu || true)
+# Add supporting files (directory at a time to improve build speed)
+COPY etc /etc
+COPY opt /opt
+COPY var /var
+
+RUN chown -R researcher:researcher /opt/ipython
+
+# Check nginx config is OK
+RUN nginx -t
 
 
 COPY /etc /etc
