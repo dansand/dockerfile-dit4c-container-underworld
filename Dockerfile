@@ -60,10 +60,6 @@ RUN source /opt/python/bin/activate && \
   ccache --clear && \
   rm -rf /home/researcher/.cache
 
-# Install NLTK, textblob & pyStatParser
-RUN /opt/python/bin/pip install nltk textblob pyyaml && \
-  /opt/python/bin/pip install git+https://github.com/emilmont/pyStatParser.git@master#egg=pyStatParser && \
-  rm -rf /home/researcher/.cache
 
 # Create IPython profile, then
 # install MathJAX locally because CDN is HTTP-only
